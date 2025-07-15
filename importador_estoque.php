@@ -936,10 +936,10 @@ class ImportadorEstoque {
     }
     
     /**
-     * Desativa veículos antigos do cliente
+     * Remove veículos antigos do cliente
      */
     private function desativarVeiculosAntigos($clienteId) {
-        $stmt = $this->pdo->prepare("UPDATE veiculos SET ativo = FALSE WHERE cliente_id = ?");
+        $stmt = $this->pdo->prepare("DELETE FROM veiculos WHERE cliente_id = ?");
         $stmt->execute([$clienteId]);
     }
     

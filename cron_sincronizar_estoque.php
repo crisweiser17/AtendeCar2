@@ -4,8 +4,8 @@
  * Este arquivo deve ser executado via cron job diariamente
  *
  * Exemplo de configuração no crontab:
- * 0 6 * * * /usr/bin/php /caminho/para/projeto/cron_sincronizar_estoque.php
- * (Executa todos os dias às 6:00 da manhã)
+ * 0 5 * * * /usr/bin/php /caminho/para/projeto/cron_sincronizar_estoque.php
+ * (Executa todos os dias às 5:00 da manhã)
  */
 
 // Configurar timezone para São Paulo
@@ -39,6 +39,9 @@ class SincronizadorEstoque {
         $this->log("Data/Hora: " . date('d/m/Y H:i:s'));
         
         try {
+            // Limpar registros antigos da fila (mais de 7 dias)
+            $this->limparFilaAntiga();
+            
             // Buscar todos os clientes ativos com URL de estoque configurada
             $clientes = $this->buscarClientesParaSincronizar();
             
@@ -95,7 +98,7 @@ class SincronizadorEstoque {
     /**
      * Busca clientes que precisam ser sincronizados
      */
-    private function buscarClientesParaSincronizar() {
+    public function buscarClientesParaSincronizar() {
         $stmt = $this->pdo->prepare("
             SELECT id, nome_loja, url_estoque, ultima_sincronizacao
             FROM clientes
@@ -103,7 +106,8 @@ class SincronizadorEstoque {
             AND url_estoque IS NOT NULL
             AND url_estoque != ''
             AND url_estoque != 'https://'
-            ORDER BY ultima_sincronizacao ASC NULLS FIRST
+            AND url_estoque LIKE '%carrosp.com.br%'
+            ORDER BY COALESCE(ultima_sincronizacao, '1970-01-01') ASC
         ");
         
         $stmt->execute();
@@ -253,13 +257,12 @@ class SincronizadorEstoque {
             foreach ($veiculosBanco as $veiculo) {
                 $linkId = basename($veiculo['link']);
                 
-                // Se o link não está mais no HTML, desativar o veículo
+                // Se o link não está mais no HTML, deletar o veículo
                 if (strpos($htmlAtual, $linkId) === false) {
-                    $stmtDesativar = $this->pdo->prepare("
-                        UPDATE veiculos SET ativo = FALSE, updated_at = CURRENT_TIMESTAMP 
-                        WHERE id = ?
+                    $stmtDeletar = $this->pdo->prepare("
+                        DELETE FROM veiculos WHERE id = ?
                     ");
-                    $stmtDesativar->execute([$veiculo['id']]);
+                    $stmtDeletar->execute([$veiculo['id']]);
                     $removidos++;
                     
                     $this->log("Veículo removido do site: {$veiculo['link']}");
@@ -302,6 +305,28 @@ class SincronizadorEstoque {
     }
     
     /**
+     * Limpa registros antigos da fila de sincronização (mais de 7 dias)
+     */
+    private function limparFilaAntiga() {
+        try {
+            $stmt = $this->pdo->prepare("
+                DELETE FROM sync_queue
+                WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)
+                AND status IN ('completed', 'failed')
+            ");
+            $stmt->execute();
+            
+            $removidos = $stmt->rowCount();
+            if ($removidos > 0) {
+                $this->log("Removidos {$removidos} registros antigos da fila de sincronização");
+            }
+            
+        } catch (Exception $e) {
+            $this->log("Erro ao limpar fila antiga: " . $e->getMessage());
+        }
+    }
+    
+    /**
      * Limpa logs antigos (manter apenas últimos 30 dias)
      */
     public function limparLogsAntigos() {
@@ -323,8 +348,56 @@ class SincronizadorEstoque {
 }
 
 // Executar sincronização se chamado diretamente
-if (php_sapi_name() === 'cli' || (isset($_GET['exec']) && $_GET['exec'] === 'sync')) {
+if (php_sapi_name() === 'cli' || (isset($_GET['exec']) && $_GET['exec'] === 'sync') || (isset($_GET['cron']) && $_GET['cron'] === 'true')) {
     $sincronizador = new SincronizadorEstoque();
+    
+    // Buscar clientes para exibir resumo quando cron=true
+    $clientes = $sincronizador->buscarClientesParaSincronizar();
+    $totalClientes = count($clientes);
+    
+    // Exibir resumo visual quando executado com cron=true via navegador
+    if (isset($_GET['cron']) && $_GET['cron'] === 'true') {
+        echo "<!DOCTYPE html>\n";
+        echo "<html lang=\"pt-BR\">\n";
+        echo "<head>\n";
+        echo "<meta charset=\"UTF-8\">\n";
+        echo "<title>Sincronização de Estoque - AtendeCar</title>\n";
+        echo "<style>\n";
+        echo "body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }\n";
+        echo ".header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }\n";
+        echo ".client-list { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }\n";
+        echo ".client-item { padding: 15px; margin: 10px 0; background: #f8f9fa; border-radius: 5px; border-left: 4px solid #667eea; }\n";
+        echo ".client-name { font-weight: bold; color: #333; }\n";
+        echo ".client-url { color: #666; font-size: 0.9em; }\n";
+        echo ".success { color: #28a745; font-weight: bold; }\n";
+        echo "</style>\n";
+        echo "</head>\n";
+        echo "<body>\n";
+        echo "<div class=\"header\">\n";
+        echo "<h1>✅ Sincronização de Estoque</h1>\n";
+        echo "<p>Atualizando o estoque para <strong>{$totalClientes} lojistas</strong></p>\n";
+        echo "</div>\n";
+        
+        if ($totalClientes > 0) {
+            echo "<div class=\"client-list\">\n";
+            echo "<h3>Lista de Lojistas:</h3>\n";
+            foreach ($clientes as $cliente) {
+                echo "<div class=\"client-item\">\n";
+                echo "<div class=\"client-name\">" . htmlspecialchars($cliente['nome_loja']) . "</div>\n";
+                echo "<div class=\"client-url\">" . htmlspecialchars($cliente['url_estoque']) . "</div>\n";
+                echo "</div>\n";
+            }
+            echo "</div>\n";
+        }
+        
+        echo "<div class=\"success\">\n";
+        echo "<p>🔄 Iniciando sincronização dos {$totalClientes} lojistas...</p>\n";
+        echo "</div>\n";
+        
+        // Forçar envio do buffer
+        ob_implicit_flush(true);
+        ob_end_flush();
+    }
     
     // Limpar logs antigos primeiro
     $sincronizador->limparLogsAntigos();
@@ -334,8 +407,129 @@ if (php_sapi_name() === 'cli' || (isset($_GET['exec']) && $_GET['exec'] === 'syn
     
     if (php_sapi_name() === 'cli') {
         echo "\nSincronização concluída. Verifique o arquivo de log para detalhes.\n";
+    } elseif (isset($_GET['cron']) && $_GET['cron'] === 'true') {
+        echo "<div class=\"success\">\n";
+        echo "<p>✅ Sincronização concluída com sucesso!</p>\n";
+        echo "</div>\n";
+        echo "</body>\n";
+        echo "</html>\n";
     } else {
         echo json_encode(['sucesso' => true, 'mensagem' => 'Sincronização executada com sucesso']);
     }
+} else {
+    // Interface web para execução via navegador
+    ?>
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Sincronização de Estoque - AtendeCar</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 30px;
+                border-radius: 10px;
+                margin-bottom: 30px;
+                text-align: center;
+            }
+            .client-list {
+                background: white;
+                border-radius: 10px;
+                padding: 20px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+            .client-item {
+                padding: 15px;
+                margin: 10px 0;
+                background: #f8f9fa;
+                border-radius: 5px;
+                border-left: 4px solid #667eea;
+            }
+            .client-name {
+                font-weight: bold;
+                color: #333;
+            }
+            .client-url {
+                color: #666;
+                font-size: 0.9em;
+            }
+            .sync-button {
+                background: #28a745;
+                color: white;
+                border: none;
+                padding: 15px 40px;
+                font-size: 1.2em;
+                border-radius: 50px;
+                cursor: pointer;
+                transition: all 0.3s;
+                box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+            }
+            .sync-button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+            }
+            .actions {
+                text-align: center;
+                margin: 30px 0;
+            }
+            .note {
+                background: #e7f3ff;
+                border: 1px solid #b3d9ff;
+                padding: 15px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🔄 Sincronização de Estoque</h1>
+            <p>Sistema de sincronização diária de estoque dos clientes</p>
+        </div>
+
+        <div class="note">
+            <strong>💡 Dica:</strong> Você pode executar a sincronização automaticamente via URL:
+            <br>
+            <code>https://atendecar.net/sistema/cron_sincronizar_estoque.php?cron=true</code>
+        </div>
+
+        <div class="client-list">
+            <h2>Clientes para Sincronizar</h2>
+            <?php
+            $sincronizador = new SincronizadorEstoque();
+            $clientes = $sincronizador->buscarClientesParaSincronizar();
+            
+            if (empty($clientes)) {
+                echo '<p>Nenhum cliente encontrado para sincronização.</p>';
+            } else {
+                echo '<p><strong>Total de clientes: ' . count($clientes) . '</strong></p>';
+                
+                foreach ($clientes as $cliente) {
+                    echo '<div class="client-item">';
+                    echo '<div class="client-name">' . htmlspecialchars($cliente['nome_loja']) . '</div>';
+                    echo '<div class="client-url">' . htmlspecialchars($cliente['url_estoque']) . '</div>';
+                    echo '</div>';
+                }
+            }
+            ?>
+        </div>
+
+        <div class="actions">
+            <button class="sync-button" onclick="window.location.href='?cron=true'">
+                🚀 Executar Sincronização Agora
+            </button>
+        </div>
+    </body>
+    </html>
+    <?php
 }
 ?>

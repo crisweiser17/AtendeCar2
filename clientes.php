@@ -44,11 +44,11 @@ $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? '';
 
 // Contar total de registros
-$countSql = "SELECT COUNT(*) FROM clientes WHERE 1=1";
+$countSql = "SELECT COUNT(*) FROM clientes c WHERE 1=1";
 $countParams = [];
 
 if ($search) {
-    $countSql .= " AND (nome_responsavel LIKE ? OR nome_loja LIKE ? OR email LIKE ?)";
+    $countSql .= " AND (c.nome_responsavel LIKE ? OR c.nome_loja LIKE ? OR c.email LIKE ?)";
     $searchTerm = "%$search%";
     $countParams[] = $searchTerm;
     $countParams[] = $searchTerm;
@@ -56,7 +56,7 @@ if ($search) {
 }
 
 if ($status_filter) {
-    $countSql .= " AND status = ?";
+    $countSql .= " AND c.status = ?";
     $countParams[] = $status_filter;
 }
 
@@ -68,12 +68,17 @@ $total_records = $countStmt->fetchColumn();
 $total_pages = ceil($total_records / $per_page);
 $offset = ($page - 1) * $per_page;
 
-// Buscar clientes com paginação
-$sql = "SELECT * FROM clientes WHERE 1=1";
+// Buscar clientes com paginação incluindo última sincronização
+$sql = "SELECT c.*,
+               (SELECT MAX(v.updated_at)
+                FROM veiculos v
+                WHERE v.cliente_id = c.id) as ultima_sincronizacao_estoque
+        FROM clientes c
+        WHERE 1=1";
 $params = [];
 
 if ($search) {
-    $sql .= " AND (nome_responsavel LIKE ? OR nome_loja LIKE ? OR email LIKE ?)";
+    $sql .= " AND (c.nome_responsavel LIKE ? OR c.nome_loja LIKE ? OR c.email LIKE ?)";
     $searchTerm = "%$search%";
     $params[] = $searchTerm;
     $params[] = $searchTerm;
@@ -81,11 +86,11 @@ if ($search) {
 }
 
 if ($status_filter) {
-    $sql .= " AND status = ?";
+    $sql .= " AND c.status = ?";
     $params[] = $status_filter;
 }
 
-$sql .= " ORDER BY created_at DESC LIMIT $per_page OFFSET $offset";
+$sql .= " ORDER BY c.created_at DESC LIMIT $per_page OFFSET $offset";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
@@ -217,6 +222,19 @@ include 'includes/header.php';
                                                 <p class="text-sm text-gray-500">
                                                     <?php echo htmlspecialchars($cliente['email']); ?> •
                                                     <?php echo htmlspecialchars($cliente['celular']); ?>
+                                                </p>
+                                                <p class="text-xs text-gray-400 mt-1">
+                                                    <svg class="inline h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                                    </svg>
+                                                    Última sincronização:
+                                                    <?php
+                                                    if ($cliente['ultima_sincronizacao_estoque']) {
+                                                        echo date('d/m/Y H:i', strtotime($cliente['ultima_sincronizacao_estoque']));
+                                                    } else {
+                                                        echo 'Nunca sincronizado';
+                                                    }
+                                                    ?>
                                                 </p>
                                             </div>
                                             <div class="ml-4">
@@ -353,5 +371,11 @@ include 'includes/header.php';
         </div>
     </div>
 </div>
+
+<script>
+function confirmarExclusao(nomeCliente) {
+    return confirm('Tem certeza que deseja excluir o cliente "' + nomeCliente + '"? Esta ação não pode ser desfeita.');
+}
+</script>
 
 <?php include 'includes/footer.php'; ?>
