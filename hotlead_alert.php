@@ -32,30 +32,11 @@ function registrarLog($mensagem, $tipo = 'INFO') {
     file_put_contents($logDir . '/hotlead_alert.log', $logMensagem, FILE_APPEND | LOCK_EX);
 }
 
-// Função para salvar payload
+// Função para salvar payload - REMOVIDA (não salva mais arquivos .txt)
 function salvarPayload($payload, $cliente_nome, $numero_destino, $instancia) {
-    $payloadDir = 'logs/payloads';
-    if (!is_dir($payloadDir)) {
-        mkdir($payloadDir, 0755, true);
-    }
-    
-    // Sanitizar nome do cliente para uso em arquivo
-    $cliente_nome_safe = preg_replace('/[^a-zA-Z0-9_-]/', '_', $cliente_nome);
-    $dataHora = date('Y-m-d_H-i-s');
-    $nomeArquivo = $payloadDir . '/payload_' . $cliente_nome_safe . '_' . $numero_destino . '_' . $dataHora . '.txt';
-    
-    $conteudo = "=== PAYLOAD ENVIADO ===" . PHP_EOL;
-    $conteudo .= "Cliente: " . $cliente_nome . PHP_EOL;
-    $conteudo .= "Número Destino: " . $numero_destino . PHP_EOL;
-    $conteudo .= "Instância: " . $instancia . PHP_EOL;
-    $conteudo .= "Data/Hora: " . date('Y-m-d H:i:s') . PHP_EOL;
-    $conteudo .= "URL: " . EVOLUTION_API_BASE_URL . $instancia . PHP_EOL;
-    $conteudo .= "Payload JSON:" . PHP_EOL;
-    $conteudo .= json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . PHP_EOL;
-    $conteudo .= "========================" . PHP_EOL . PHP_EOL;
-    
-    file_put_contents($nomeArquivo, $conteudo);
-    return $nomeArquivo;
+    // Agora apenas loga o payload no arquivo de log principal
+    registrarLog("Payload enviado - Cliente: $cliente_nome, Número: $numero_destino, Instância: $instancia, Payload: " . json_encode($payload));
+    return null;
 }
 
 // Função para formatar número de WhatsApp
@@ -353,9 +334,8 @@ try {
             'text' => $mensagem
         ];
         
-        // Salvar payload para debug
-        $arquivo_payload = salvarPayload($payload, $cliente['nome_loja'], $numero_formatado, $nome_instancia);
-        registrarLog("Payload salvo em: $arquivo_payload");
+        // Log do payload (sem salvar arquivo .txt)
+        salvarPayload($payload, $cliente['nome_loja'], $numero_formatado, $nome_instancia);
         
         $resultado = enviarMensagemWhatsApp($numero_formatado, $mensagem, $nome_instancia, $token_evo);
         
@@ -365,8 +345,7 @@ try {
                 'numero_original' => $numero_original,
                 'numero_formatado' => $numero_formatado,
                 'status' => 'sucesso',
-                'http_code' => $resultado['httpCode'],
-                'payload_file' => $arquivo_payload
+                'http_code' => $resultado['httpCode']
             ];
             $envios_sucesso++;
         } else {
@@ -376,8 +355,7 @@ try {
                 'numero_formatado' => $numero_formatado,
                 'status' => 'erro',
                 'http_code' => $resultado['httpCode'],
-                'erro' => $resultado['error'],
-                'payload_file' => $arquivo_payload
+                'erro' => $resultado['error']
             ];
             $envios_erro++;
         }

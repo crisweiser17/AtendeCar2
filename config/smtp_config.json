@@ -1,0 +1,9 @@
+{
+    "smtp_host": "sandbox.smtp.mailtrap.io",
+    "smtp_port": "2525",
+    "smtp_username": "ce4deba7ca79ee",
+    "smtp_password": "f3128a3df002ec",
+    "smtp_from_email": "from@example.com",
+    "smtp_from_name": "Magic Elves",
+    "smtp_security": "tls"
+}
