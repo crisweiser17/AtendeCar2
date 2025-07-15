@@ -104,11 +104,14 @@ class ImportadorEstoque {
     }
     
     /**
-     * Extração específica para CarrosP.com.br - VERSÃO CORRIGIDA
+     * Extração específica para CarrosP.com.br - VERSÃO CORRIGIDA COM KM
      */
     private function extrairCarrosPEspecifico($html, $baseUrl) {
         $veiculos = [];
         $linksUnicos = [];
+        
+        // NOVA ESTRATÉGIA: Extrair todas as KMs primeiro
+        $todasKms = $this->extrairTodasKmsDoHtml($html);
         
         // ESTRATÉGIA 1: Buscar links absolutos (funciona para marca/modelo)
         $padraoLinkAbsoluto = '/href="(https:\/\/carrosp\.com\.br\/comprar\/[^"]+)"/i';
@@ -119,6 +122,7 @@ class ImportadorEstoque {
         preg_match_all($padraoLinkRelativo, $html, $matchesRelativos);
         
         // Processar links absolutos primeiro
+        $indiceKm = 0;
         foreach ($matchesAbsolutos[1] as $linkCompleto) {
             if (in_array($linkCompleto, $linksUnicos)) {
                 continue;
@@ -127,12 +131,18 @@ class ImportadorEstoque {
             
             $veiculo = $this->extrairDadosDoLink($html, $linkCompleto, $baseUrl);
             if ($veiculo && !empty($veiculo['nome'])) {
+                // Associar KM pela ordem
+                if (isset($todasKms[$indiceKm])) {
+                    $veiculo['km'] = $todasKms[$indiceKm];
+                }
                 $veiculos[] = $veiculo;
+                $indiceKm++;
             }
         }
         
         // Se não encontrou links absolutos, tentar relativos
         if (empty($veiculos)) {
+            $indiceKm = 0;
             foreach ($matchesRelativos[1] as $linkRelativo) {
                 $linkCompleto = $this->normalizarURL($linkRelativo, $baseUrl);
                 
@@ -143,7 +153,12 @@ class ImportadorEstoque {
                 
                 $veiculo = $this->extrairDadosVeiculoCarrosP($html, $linkCompleto, $baseUrl);
                 if ($veiculo && !empty($veiculo['nome'])) {
+                    // Associar KM pela ordem
+                    if (isset($todasKms[$indiceKm])) {
+                        $veiculo['km'] = $todasKms[$indiceKm];
+                    }
                     $veiculos[] = $veiculo;
+                    $indiceKm++;
                 }
             }
         }
@@ -161,7 +176,12 @@ class ImportadorEstoque {
             'modelo' => '',
             'preco' => 0,
             'ano' => null,
-            'link' => $linkVeiculo
+            'km' => null,
+            'cambio' => '',
+            'cor' => '',
+            'combustivel' => '',
+            'link' => $linkVeiculo,
+            'foto' => ''
         ];
         
         // Extrair dados da estrutura do link
@@ -205,19 +225,7 @@ class ImportadorEstoque {
             }
         }
         
-        // Extrair informações específicas do CarrosP (câmbio, combustível, km)
-        if (preg_match('/<p[^>]*class="[^"]*info-geral[^"]*"[^>]*>([^<]+)<\/p>/i', $html, $infoMatch)) {
-            $infoTexto = trim($infoMatch[1]);
-            $outrasInfos = $this->extrairInfosTexto($infoTexto);
-            $veiculo = array_merge($veiculo, $outrasInfos);
-        } else {
-            // Fallback: buscar em contexto próximo ao link
-            $contexto = $this->buscarContextoDoLink($html, basename($linkVeiculo));
-            if ($contexto) {
-                $outrasInfos = $this->extrairInfosTexto($contexto);
-                $veiculo = array_merge($veiculo, $outrasInfos);
-            }
-        }
+        // KM será associada pela nova estratégia no método extrairCarrosPEspecifico
         
         return $veiculo;
     }
@@ -240,16 +248,16 @@ class ImportadorEstoque {
             'foto' => ''
         ];
         
-        // Buscar o bloco HTML que contém este link específico
-        $padraoContainer = '/(<div[^>]*>(?:[^<]|<(?!\/div>))*?href="[^"]*' . preg_quote(basename($linkVeiculo), '/') . '[^"]*"(?:[^<]|<(?!\/div>))*?<\/div>)/is';
+        // Buscar o bloco HTML que contém este link específico - VERSÃO MELHORADA
+        $linkBase = basename($linkVeiculo);
+        $blocoHtml = $this->buscarContextoDoLink($html, $linkBase);
         
-        if (preg_match($padraoContainer, $html, $matches)) {
-            $blocoHtml = $matches[1];
-        } else {
-            $posicaoLink = strpos($html, basename($linkVeiculo));
+        if (empty($blocoHtml)) {
+            // Fallback: buscar por contexto mais amplo
+            $posicaoLink = strpos($html, $linkBase);
             if ($posicaoLink !== false) {
-                $inicio = max(0, $posicaoLink - 2000);
-                $blocoHtml = substr($html, $inicio, 4000);
+                $inicio = max(0, $posicaoLink - 1500);
+                $blocoHtml = substr($html, $inicio, 3000);
             } else {
                 return null;
             }
@@ -294,13 +302,13 @@ class ImportadorEstoque {
         // Extrair preço usando múltiplas estratégias
         $veiculo['preco'] = $this->extrairPrecoMultiplasEstrategias($html, $linkVeiculo);
         
-        // Extrair informações específicas do CarrosP (câmbio, combustível, km)
+        // Extrair informações específicas do CarrosP (câmbio, combustível, km) - BLOCO ESPECÍFICO
         if (preg_match('/<p[^>]*class="[^"]*info-geral[^"]*"[^>]*>([^<]+)<\/p>/i', $blocoHtml, $infoMatch)) {
             $infoTexto = trim($infoMatch[1]);
             $outrasInfos = $this->extrairInfosTexto($infoTexto);
             $veiculo = array_merge($veiculo, $outrasInfos);
         } else {
-            // Fallback: buscar em todo o bloco HTML
+            // Fallback: buscar em todo o bloco HTML específico deste veículo
             $outrasInfos = $this->extrairInfosTexto($blocoHtml);
             $veiculo = array_merge($veiculo, $outrasInfos);
         }
@@ -482,34 +490,22 @@ class ImportadorEstoque {
     }
     
     /**
-     * Extrai informações do texto (ano, km, câmbio, etc.) - VERSÃO CARROSP
+     * Extrai apenas KM do texto - VERSÃO CORRIGIDA PARA CARROSP
      */
     private function extrairInfosTexto($texto) {
         $info = [];
         
-        // PADRÃO ESPECÍFICO CARROSP: "Aut. | Flex | 132.326 KM"
-        if (preg_match('/([A-Za-z]+\.?)\s*\|\s*([A-Za-z]+)\s*\|\s*([\d.,]+)\s*KM/i', $texto, $matches)) {
-            // Câmbio
-            $cambio = trim($matches[1]);
-            if (stripos($cambio, 'Aut') !== false) {
-                $info['cambio'] = 'Automático';
-            } elseif (stripos($cambio, 'Man') !== false) {
-                $info['cambio'] = 'Manual';
-            } else {
-                $info['cambio'] = ucfirst(strtolower($cambio));
-            }
-            
-            // Combustível
-            $combustivel = trim($matches[2]);
-            $info['combustivel'] = ucfirst(strtolower($combustivel));
-            
-            // Quilometragem
-            $km = str_replace(['.', ','], '', trim($matches[3]));
+        // PADRÃO ESPECÍFICO CARROSP: "Aut. | Flex | 132.326 KM" ou "Aut. CVT | Flex | 67.887 KM"
+        // Buscar por padrão: qualquer_coisa | qualquer_coisa | NÚMERO KM
+        if (preg_match('/[^|]+\|\s*[^|]+\|\s*([\d.,]+)\s*KM/i', $texto, $matches)) {
+            // Extrair a quilometragem (3º elemento após os separadores |)
+            $kmTexto = trim($matches[1]);
+            $km = str_replace(['.', ','], '', $kmTexto);
             if (is_numeric($km)) {
                 $info['km'] = (int)$km;
             }
         } else {
-            // FALLBACK: Padrões genéricos
+            // FALLBACK: Padrões genéricos para KM
             
             // Ano
             if (preg_match('/\b(19|20)\d{2}\b/', $texto, $matches)) {
@@ -522,23 +518,6 @@ class ImportadorEstoque {
                 if (is_numeric($km)) {
                     $info['km'] = (int)$km;
                 }
-            }
-            
-            // Câmbio genérico
-            if (preg_match('/\b(manual|automático|automática|cvt|automatizado|aut\.?|man\.?)\b/i', $texto, $matches)) {
-                $cambio = strtolower($matches[1]);
-                if (strpos($cambio, 'aut') !== false) {
-                    $info['cambio'] = 'Automático';
-                } elseif (strpos($cambio, 'man') !== false) {
-                    $info['cambio'] = 'Manual';
-                } else {
-                    $info['cambio'] = ucfirst($cambio);
-                }
-            }
-            
-            // Combustível genérico
-            if (preg_match('/\b(flex|gasolina|álcool|diesel|híbrido|elétrico)\b/i', $texto, $matches)) {
-                $info['combustivel'] = ucfirst(strtolower($matches[1]));
             }
         }
         
@@ -631,20 +610,132 @@ class ImportadorEstoque {
         return null;
     }
     
+    /**
+     * NOVO MÉTODO: Extrai combustível e câmbio da versão do veículo
+     */
+    private function extrairCombustivelCambioVersao($versao) {
+        $info = [
+            'combustivel' => '',
+            'cambio' => 'Manual' // Default
+        ];
+        
+        // Extrair combustível
+        if (stripos($versao, 'Flex') !== false) {
+            $info['combustivel'] = 'Flex';
+        } elseif (stripos($versao, 'Gasolina') !== false) {
+            $info['combustivel'] = 'Gasolina';
+        } elseif (stripos($versao, 'Diesel') !== false) {
+            $info['combustivel'] = 'Diesel';
+        }
+        
+        // Extrair câmbio - ORDEM IMPORTANTE: CVT primeiro, depois Automático
+        if (stripos($versao, 'CVT') !== false) {
+            $info['cambio'] = 'Automático CVT';
+        } elseif (stripos($versao, 'Automatico') !== false || stripos($versao, 'Automático') !== false) {
+            $info['cambio'] = 'Automático';
+        } elseif (stripos($versao, 'Manual') !== false) {
+            $info['cambio'] = 'Manual';
+        }
+        // Se não encontrar nenhum, mantém o default 'Manual'
+        
+        return $info;
+    }
     
     /**
-     * NOVO MÉTODO: buscarContextoDoLink
+     * NOVO MÉTODO: buscarContextoDoLink - VERSÃO MELHORADA
      */
     private function buscarContextoDoLink($html, $linkBase) {
-        // Buscar contexto de 1000 caracteres ao redor do link
+        // Estratégia 1: Buscar por div que contenha o link específico
+        $padraoDiv = '/<div[^>]*>(?:[^<]|<(?!\/div>))*?' . preg_quote($linkBase, '/') . '(?:[^<]|<(?!\/div>))*?<\/div>/is';
+        if (preg_match($padraoDiv, $html, $matches)) {
+            return $matches[0];
+        }
+        
+        // Estratégia 2: Buscar por contexto mais amplo ao redor do link
         $pos = strpos($html, $linkBase);
         if ($pos !== false) {
-            $inicio = max(0, $pos - 1000);
-            $contexto = substr($html, $inicio, 2000);
+            // Buscar início de div anterior
+            $inicioDiv = strrpos(substr($html, 0, $pos), '<div');
+            if ($inicioDiv !== false) {
+                $inicio = $inicioDiv;
+            } else {
+                $inicio = max(0, $pos - 1500);
+            }
+            
+            // Buscar fim de div posterior
+            $fimDiv = strpos($html, '</div>', $pos);
+            if ($fimDiv !== false) {
+                $fim = $fimDiv + 6;
+            } else {
+                $fim = $pos + 1500;
+            }
+            
+            $contexto = substr($html, $inicio, $fim - $inicio);
             return $contexto;
         }
         
         return '';
+    }
+    
+    /**
+     * NOVO MÉTODO: Extrai KM do JSON-LD estruturado
+     */
+    private function extrairKmDoJsonLD($html, $linkBase) {
+        // Buscar por JSON-LD que contenha o ID do veículo
+        if (preg_match('/"vehicleIdentificationNumber":"[^"]*' . preg_quote($linkBase, '/') . '"[^}]*"mileageFromOdometer":\{"@type":"QuantitativeValue","value":"(\d+)"/i', $html, $matches)) {
+            return (int)$matches[1];
+        }
+        
+        return null;
+    }
+    
+    /**
+     * NOVO MÉTODO: Extrai todas as KMs do HTML na ordem que aparecem
+     */
+    private function extrairTodasKmsDoHtml($html) {
+        $kms = [];
+        
+        // Buscar padrão CarrosP: "Man. | Flex | 43.302 KM"
+        if (preg_match_all('/([A-Za-z]+\.?)\s*\|\s*([A-Za-z]+)\s*\|\s*([\d.,]+)\s*KM/i', $html, $matches)) {
+            foreach ($matches[3] as $kmTexto) {
+                $km = str_replace(['.', ','], '', trim($kmTexto));
+                if (is_numeric($km)) {
+                    $kms[] = (int)$km;
+                }
+            }
+        }
+        
+        return $kms;
+    }
+    
+    /**
+     * NOVO MÉTODO: Extrai KM por proximidade no HTML
+     */
+    private function extrairKmPorProximidade($html, $linkBase) {
+        // Buscar todas as posições onde o ID do veículo aparece
+        $posicoes = [];
+        $offset = 0;
+        while (($pos = strpos($html, $linkBase, $offset)) !== false) {
+            $posicoes[] = $pos;
+            $offset = $pos + 1;
+        }
+        
+        // Para cada posição, buscar por padrões de KM próximos
+        foreach ($posicoes as $pos) {
+            // Buscar em um contexto de 1000 caracteres ao redor
+            $inicio = max(0, $pos - 500);
+            $contexto = substr($html, $inicio, 1000);
+            
+            // Buscar padrão CarrosP: "Man. | Flex | 43.302 KM"
+            if (preg_match('/([A-Za-z]+\.?)\s*\|\s*([A-Za-z]+)\s*\|\s*([\d.,]+)\s*KM/i', $contexto, $matches)) {
+                $km = str_replace(['.', ','], '', trim($matches[3]));
+                if (is_numeric($km)) {
+                    return (int)$km;
+                }
+            }
+        }
+        
+        return null;
     }
     
     /**
@@ -902,6 +993,14 @@ class ImportadorEstoque {
                     $precoStr = 'R$ ' . number_format($veiculo['preco'], 2, ',', '.');
                 }
                 
+                // NOVA ESTRATÉGIA: Extrair combustível e câmbio da versão
+                $infosVersao = $this->extrairCombustivelCambioVersao($versao);
+                $combustivel = $infosVersao['combustivel'];
+                $cambio = $infosVersao['cambio'];
+                
+                // Garantir que KM seja um valor válido
+                $kmValue = isset($veiculo['km']) && is_numeric($veiculo['km']) && $veiculo['km'] > 0 ? (int)$veiculo['km'] : null;
+                
                 // Garantir que o link não esteja vazio
                 if (empty($veiculo['link'])) {
                     error_log("Veículo sem link ignorado: " . $versao);
@@ -919,10 +1018,10 @@ class ImportadorEstoque {
                         $marcaModelo,
                         $precoStr,
                         $veiculo['ano'] ?: null,
-                        $veiculo['km'] ?: null,
-                        $veiculo['cambio'] ?: '',
+                        $kmValue,
+                        $cambio, // Usar valor extraído da versão
                         $veiculo['cor'] ?: '',
-                        $veiculo['combustivel'] ?: '',
+                        $combustivel, // Usar valor extraído da versão
                         $veiculo['foto'] ?: '',
                         $clienteId,
                         $veiculo['link']
@@ -936,10 +1035,10 @@ class ImportadorEstoque {
                         $marcaModelo,
                         $precoStr,
                         $veiculo['ano'] ?: null,
-                        $veiculo['km'] ?: null,
-                        $veiculo['cambio'] ?: '',
+                        $kmValue,
+                        $cambio, // Usar valor extraído da versão
                         $veiculo['cor'] ?: '',
-                        $veiculo['combustivel'] ?: '',
+                        $combustivel, // Usar valor extraído da versão
                         $veiculo['link'],
                         $veiculo['foto'] ?: ''
                     ]);
