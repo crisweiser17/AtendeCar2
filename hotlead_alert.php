@@ -171,6 +171,73 @@ function validarParametros($client_id, $lead_name, $lead_number) {
     return $erros;
 }
 
+// Função para salvar lead no banco de dados com verificação de duplicados por cliente e veículo
+function salvarLead($pdo, $client_id, $lead_name, $lead_number, $is_hot_lead = true, $veiculo = null) {
+    try {
+        $lead_number_formatado = formatarNumeroWhatsApp($lead_number);
+        
+        // Verificar se o lead já existe para este cliente específico
+        $stmt = $pdo->prepare("SELECT id, is_hot_lead, veiculo FROM leads WHERE client_id = ? AND lead_number = ?");
+        $stmt->execute([$client_id, $lead_number_formatado]);
+        $lead_existente = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($lead_existente) {
+            // Lead já existe para este cliente, verificar se precisa atualizar
+            $lead_id = $lead_existente['id'];
+            $hot_lead_atual = (bool)$lead_existente['is_hot_lead'];
+            $veiculo_atual = $lead_existente['veiculo'] ?? null;
+            
+            $updates = [];
+            $params = [];
+            
+            if ($is_hot_lead && !$hot_lead_atual) {
+                $updates[] = "is_hot_lead = 1";
+            }
+            
+            if ($veiculo && $veiculo !== $veiculo_atual) {
+                $updates[] = "veiculo = ?";
+                $params[] = $veiculo;
+            }
+            
+            if (!empty($updates)) {
+                $updates[] = "updated_at = NOW()";
+                $sql = "UPDATE leads SET " . implode(', ', $updates) . " WHERE id = ?";
+                $params[] = $lead_id;
+                
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                
+                registrarLog("Lead atualizado: ID=$lead_id, client_id=$client_id, updates=" . implode(', ', $updates));
+                return $lead_id;
+            } else {
+                registrarLog("Lead já existe para este cliente, sem mudanças: ID=$lead_id, client_id=$client_id");
+                return $lead_id;
+            }
+        } else {
+            // Lead não existe para este cliente, inserir novo
+            $stmt = $pdo->prepare("
+                INSERT INTO leads (client_id, lead_number, lead_name, is_hot_lead, veiculo)
+                VALUES (?, ?, ?, ?, ?)
+            ");
+            
+            $stmt->execute([
+                $client_id,
+                $lead_number_formatado,
+                $lead_name,
+                $is_hot_lead ? 1 : 0,
+                $veiculo
+            ]);
+            
+            $lead_id = $pdo->lastInsertId();
+            registrarLog("Novo lead salvo: ID=$lead_id, client_id=$client_id, lead_name=$lead_name, lead_number=$lead_number_formatado, hot_lead=" . ($is_hot_lead ? 'true' : 'false') . ", veiculo=" . ($veiculo ?? 'NULL'));
+            return $lead_id;
+        }
+    } catch (Exception $e) {
+        registrarLog("Erro ao salvar lead: " . $e->getMessage(), 'ERROR');
+        return false;
+    }
+}
+
 // Início do processamento com debug
 registrarLog('=== NOVA REQUISIÇÃO HOTLEAD ===');
 
@@ -256,6 +323,12 @@ try {
     // Preparar mensagem limpa sem escapamento excessivo
     $mensagem = "AtendeCar identificou um lead qualificado. Nome = " . $lead_name . " e numero = " . $lead_number;
     
+    // Receber veículo via GET (opcional)
+    $veiculo = isset($_GET['veiculo']) ? trim($_GET['veiculo']) : null;
+    
+    // Salvar lead no banco de dados com veículo
+    $lead_id = salvarLead($pdo, $client_id, $lead_name, $lead_number, true, $veiculo);
+    
     // Enviar mensagens
     $envios = [];
     $envios_sucesso = 0;
@@ -319,6 +392,7 @@ try {
             'cliente_nome' => $cliente['nome_loja'],
             'lead_name' => $lead_name,
             'lead_number' => $lead_number,
+            'lead_id' => $lead_id,
             'instancia' => $nome_instancia,
             'total_numeros' => count($alertas_whatsapp),
             'envios_sucesso' => $envios_sucesso,
@@ -327,7 +401,7 @@ try {
         ]
     ];
     
-    registrarLog("Processamento concluído - Sucesso: $envios_sucesso, Erros: $envios_erro");
+    registrarLog("Processamento concluído - Sucesso: $envios_sucesso, Erros: $envios_erro, Lead ID: $lead_id");
     
     http_response_code(200);
     echo json_encode($resposta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

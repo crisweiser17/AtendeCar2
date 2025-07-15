@@ -266,12 +266,16 @@ include 'includes/header.php';
                                     <div class="flex items-center space-x-2 ml-4">
                                         <a href="estoque.php?id=<?php echo $cliente['id']; ?>"
                                            class="text-green-600 hover:text-green-500 text-sm font-medium">
-                                            Estoque
-                                        </a>
-                                        <a href="cliente_form.php?id=<?php echo $cliente['id']; ?>"
+                                           Estoque
+                                       </a>
+                                       <a href="ver_leads_lojista.php?client_id=<?php echo $cliente['id']; ?>"
+                                           class="text-purple-600 hover:text-purple-500 text-sm font-medium">
+                                           Leads
+                                       </a>
+                                       <a href="cliente_form.php?id=<?php echo $cliente['id']; ?>"
                                            class="text-blue-600 hover:text-blue-500 text-sm font-medium">
-                                            Editar
-                                        </a>
+                                           Editar
+                                       </a>
                                         <form method="POST" class="inline" onsubmit="return confirmarExclusao('<?php echo htmlspecialchars($cliente['nome_responsavel']); ?>')">
                                             <input type="hidden" name="action" value="delete">
                                             <input type="hidden" name="id" value="<?php echo $cliente['id']; ?>">
